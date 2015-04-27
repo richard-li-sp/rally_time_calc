@@ -1,0 +1,14 @@
+workspaces:
+  SomeWorkspace:
+    id: 1234456789
+    user: user@domain
+    pass: userpass
+    filters:
+      project: 2233445566
+    objects: [HierarchicalRequirement, Defect]
+    enable: [cycle_time, lead_time, queue_time]
+    fields:
+      cycle_time: c_CycleTime
+      lead_time: c_LeadTime
+      queue_time: c_QueueTime
+

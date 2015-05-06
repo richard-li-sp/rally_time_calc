@@ -85,9 +85,15 @@ class CLQFill
       "(AcceptedDate = null))" unless @update_all
     objects = @rally.find(query)
 
+    total_count = objects.count
+    object_count = 0
+
     objects.each do |obj|
       obj.read
       puts "#{obj['FormattedID']}:"
+
+      object_count += 1
+      puts "#{object_count} of #{total_count}" if object_count % 10 == 0
       STDOUT.flush
 
       create_date = (Date.parse(obj['CreationDate']) rescue nil)

@@ -1,3 +1,5 @@
+#!/usr/bin/env ruby
+
 require 'rally_api'
 require 'rest-client'
 require 'json'
@@ -73,6 +75,7 @@ def fill_clq(lookback_url, object_type, name, info, do_fill = false)
 
   begin
     puts "---Page #{page}---"
+    STDOUT.flush
     request['start'] = page * pagesize
     response = rest.post(request.to_json, content_type: 'text/javascript')
     output = JSON.parse(response)
@@ -86,6 +89,7 @@ def fill_clq(lookback_url, object_type, name, info, do_fill = false)
         obj = rally.read(object_type, item['ObjectID'])
 
         puts "-#{item['FormattedID']}:"
+        STDOUT.flush
 
         create_date = (Date.parse(item['CreationDate']) rescue nil)
         accepted_date = (Date.parse(item['AcceptedDate']) rescue nil)
@@ -134,6 +138,7 @@ def fill_clq(lookback_url, object_type, name, info, do_fill = false)
         end
 
         puts "c:#{cycle_time}, l:#{lead_time}, q:#{queue_time}"
+        STDOUT.flush
 
         if info['enable']
           if info['enable'].include?('cycle_time')
@@ -155,13 +160,16 @@ def fill_clq(lookback_url, object_type, name, info, do_fill = false)
 
         if update.empty?
           puts "No update"
+          STDOUT.flush
         else
           rally.update(object_type, item['ObjectID'], update) if do_fill
           puts "update: #{update}"
+          STDOUT.flush
         end
 
       rescue Exception => e
         puts "Exception: #{e.backtrace}"
+        STDOUT.flush
       end
     end
 
@@ -170,8 +178,11 @@ def fill_clq(lookback_url, object_type, name, info, do_fill = false)
   end until page * pagesize > result_count
 rescue Exception => e
   puts "Exception, backtrace: #{e.backtrace.to_json}"
+  STDOUT.flush
   raise e
 end
+
+puts "Rally Time Calculator started: #{DateTime.now.to_s}"
 
 conf = YAML.load_file('rally_time_calc.yml')
 
@@ -180,7 +191,7 @@ raise "Workspace needs to be an array" unless conf['workspaces'].is_a?(Hash)
 
 conf['workspaces'].each do |name, info|
   raise "No workspace id found for #{name}" unless info['id']
-  types = info['types']
+  types = info['objects']
   types = ['HierarchicalRequirement'] unless types
 
   lookback_url =
@@ -191,3 +202,5 @@ conf['workspaces'].each do |name, info|
     fill_clq(lookback_url, type, name,  info, true)
   end
 end
+
+puts "Rally Time Calculator completed: #{DateTime.now.to_s}"

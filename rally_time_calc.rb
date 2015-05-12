@@ -52,10 +52,10 @@ class CLQFill
       @lookback.post(defined_request.to_json, content_type: 'text/javascript')
     )
 
-    (Date.parse(defined_output['Results'][0]['_ValidateFrom']) rescue nil)
+    (Date.parse(defined_output['Results'][0]['_ValidFrom']) rescue nil)
   end
 
-  def get_design_date(object_id)
+  def get_designed_date(object_id)
     designed_request = {
       'find' => {
         'ObjectID' => object_id,
@@ -76,12 +76,17 @@ class CLQFill
   end
 
   def fill(object_type)
-    pagesize = 20
+    if @update_all
+      puts "Refreshing ALL objects..."
+    else
+      puts "Update only, objects accepted in last 48 hours"
+    end
+
     query = RallyAPI::RallyQuery.new()
     query.type = object_type
     query.query_string =
       '((AcceptedDate >= ' \
-      "#{(DateTime.parse(Time.now.utc.to_s) - 2).strftime('%FT%TZ')}) OR"
+      "\"#{(DateTime.parse(Time.now.utc.to_s) - 2).strftime('%FT%TZ')}\") OR " \
       "(AcceptedDate = null))" unless @update_all
     objects = @rally.find(query)
 
@@ -108,19 +113,15 @@ class CLQFill
                      else
                        0
                      end
-        lead_time = (designed_date ? (today - designed_date).to_i : 0)
-        queue_time = (defined_date ? (today - defined_date).to_i : 0)
+        lead_time = (@today - create_date).to_i
+        queue_time = (defined_date ? (@today - defined_date).to_i : 0)
       else
         cycle_time = if in_progress_date
                        (accepted_date - in_progress_date).to_i
                      else
                        1
                      end
-        lead_time = if designed_date
-                      (accepted_date - designed_date).to_i
-                    else
-                      (accepted_date - created_date).to_i
-                    end
+        lead_time = (accepted_date - create_date).to_i
         queue_time = if defined_date
                        if in_progress_date
                          (in_progress_date - defined_date).to_i
@@ -154,7 +155,11 @@ class CLQFill
         puts "No update"
         STDOUT.flush
       else
-        @rally.update(object_type, obj['ObjectID'], update) unless @dryrun
+        if @dryrun
+          print "(Dryrun no update) "
+        else
+          @rally.update(object_type, obj['ObjectID'], update)
+        end
         puts "update: #{update}"
         STDOUT.flush
       end
@@ -361,7 +366,8 @@ conf['workspaces'].each do |name, info|
   clq = CLQFill.new(name, info['id'], info['user'], info['pass'], options)
 
   types.each do |type|
-    fill_clq(lookback_url, type, name,  info, true)
+    clq.fill(type)
+    # fill_clq(lookback_url, type, name,  info, true)
   end
 end
 

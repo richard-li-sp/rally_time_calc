@@ -127,7 +127,6 @@ class CLQFill
 
     if state_toggles.empty?
       cycle_time = 0
-
       return cycle_time if !accepted
 
       cycle_time = (accepted_date - in_progress_date).to_i if
@@ -176,72 +175,83 @@ class CLQFill
     object_count = 0
 
     objects.each do |obj|
-      obj.read
-      puts "#{obj['FormattedID']}:"
+      retry_count = 0
+      begin
+        obj.read
+        puts "#{obj['FormattedID']}:"
 
-      object_count += 1
-      puts "#{object_count} of #{total_count}" if object_count % 10 == 0
-      STDOUT.flush
-
-      create_date = (Date.parse(obj['CreationDate']) rescue nil)
-      accepted_date = (Date.parse(obj['AcceptedDate']) rescue nil)
-      in_progress_date = (Date.parse(obj['InProgressDate']) rescue nil)
-      defined_date = get_defined_date(obj['ObjectID'])
-      designed_date = get_designed_date(obj['ObjectID'])
-
-      if obj['ScheduleState'] != 'Accepted'
-        cycle_time = calculate_cycle_time(obj['ObjectID'], false,
-                                          in_progress_date,
-                                          accepted_date
-                                         )
-        lead_time = (@today - create_date).to_i
-        queue_time = (defined_date ? (@today - defined_date).to_i : 0)
-      else
-        cycle_time = calculate_cycle_time(obj['ObjectID'], true,
-                                          in_progress_date,
-                                          accepted_date
-                                         )
-        lead_time = (accepted_date - create_date).to_i
-        queue_time = if defined_date
-                       if in_progress_date
-                         (in_progress_date - defined_date).to_i
-                       else
-                         (accepted_date - defined_date).to_i
-                       end
-                     else
-                       0
-                     end
-      end
-
-      puts "c:#{cycle_time}, l:#{lead_time}, q:#{queue_time}"
-      STDOUT.flush
-
-      update = {}
-
-      if @enable.include?('cycle_time')
-        update[@cycle_time] = cycle_time unless
-          cycle_time == obj[@cycle_time]
-      end
-      if @enable.include?('lead_time')
-        update[@lead_time] = lead_time unless
-          lead_time == obj[@lead_time]
-      end
-      if @enable.include?('queue_time')
-        update[@queue_time] = queue_time unless
-          queue_time == obj[@queue_time]
-      end
-
-      if update.empty?
-        puts "No update"
+        object_count += 1
+        puts "#{object_count} of #{total_count}" if object_count % 10 == 0
         STDOUT.flush
-      else
-        if @dryrun
-          print "(Dryrun no update) "
+
+        create_date = (Date.parse(obj['CreationDate']) rescue nil)
+        accepted_date = (Date.parse(obj['AcceptedDate']) rescue nil)
+        in_progress_date = (Date.parse(obj['InProgressDate']) rescue nil)
+        defined_date = get_defined_date(obj['ObjectID'])
+        designed_date = get_designed_date(obj['ObjectID'])
+
+        if obj['ScheduleState'] != 'Accepted'
+          cycle_time = calculate_cycle_time(obj['ObjectID'], false,
+                                            in_progress_date,
+                                            accepted_date
+                                           )
+          lead_time = (@today - create_date).to_i
+          queue_time = (defined_date ? (@today - defined_date).to_i : 0)
         else
-          @rally.update(object_type, obj['ObjectID'], update)
+          cycle_time = calculate_cycle_time(obj['ObjectID'], true,
+                                            in_progress_date,
+                                            accepted_date
+                                           )
+          lead_time = (accepted_date - create_date).to_i
+          queue_time = if defined_date
+                         if in_progress_date
+                           (in_progress_date - defined_date).to_i
+                         else
+                           (accepted_date - defined_date).to_i
+                         end
+                       else
+                         0
+                       end
         end
-        puts "update: #{update}"
+
+        puts "c:#{cycle_time}, l:#{lead_time}, q:#{queue_time}"
         STDOUT.flush
+
+        update = {}
+
+        if @enable.include?('cycle_time')
+          update[@cycle_time] = cycle_time unless
+            cycle_time == obj[@cycle_time]
+        end
+        if @enable.include?('lead_time')
+          update[@lead_time] = lead_time unless
+            lead_time == obj[@lead_time]
+        end
+        if @enable.include?('queue_time')
+          update[@queue_time] = queue_time unless
+            queue_time == obj[@queue_time]
+        end
+
+        if update.empty?
+          puts "No update"
+          STDOUT.flush
+        else
+          if @dryrun
+            print "(Dryrun no update) "
+          else
+            @rally.update(object_type, obj['ObjectID'], update)
+          end
+          puts "update: #{update}"
+          STDOUT.flush
+        end
+      rescue Exception => e
+        retry_count += 1
+        if retry_count <= 5
+          puts "Retry ##{retry_count}"
+          retry
+        else
+          raise "Retried 5 times for #{obj['ObjectID']}, fail: #{e}"
+        end
       end
     end
   end

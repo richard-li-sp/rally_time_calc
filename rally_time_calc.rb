@@ -81,7 +81,7 @@ class CLQFill
     (Date.parse(designed_output['Results'][0]['_ValidateFrom']) rescue nil)
   end
 
-  def calculate_cycle_time(id, accepted)
+  def calculate_cycle_time(id, accepted, in_progress_date, accepted_date)
     pagesize = 20
     state_scan = {
       'find' => {
@@ -122,10 +122,19 @@ class CLQFill
       page += 1
       sleep 1
     end until page * pagesize > result_count
-puts "toggle: #{state_toggles}"
+
+    puts "toggle: #{state_toggles}"
+
     if state_toggles.empty?
-      return 0 if !accepted
-      return 1 # minimum cycle 1 if it's accepted
+      cycle_time = 0
+
+      return cycle_time if !accepted
+
+      cycle_time = (accepted_date - in_progress_date).to_i if
+        in_progress_date && accepted_date
+      cycle_time = 1 if cycle_time < 1
+
+      return cycle_time # minimum cycle 1 if it's accepted
     end
 
     current_state = true
@@ -181,11 +190,17 @@ puts "toggle: #{state_toggles}"
       designed_date = get_designed_date(obj['ObjectID'])
 
       if obj['ScheduleState'] != 'Accepted'
-        cycle_time = calculate_cycle_time(obj['ObjectID'], false)
+        cycle_time = calculate_cycle_time(obj['ObjectID'], false,
+                                          in_progress_date,
+                                          accepted_date
+                                         )
         lead_time = (@today - create_date).to_i
         queue_time = (defined_date ? (@today - defined_date).to_i : 0)
       else
-        cycle_time = calculate_cycle_time(obj['ObjectID'], true)
+        cycle_time = calculate_cycle_time(obj['ObjectID'], true,
+                                          in_progress_date,
+                                          accepted_date
+                                         )
         lead_time = (accepted_date - create_date).to_i
         queue_time = if defined_date
                        if in_progress_date

@@ -26,12 +26,16 @@ class CLQFill
     @dryrun = options['dryrun'] ? true : false
     @update_all = (backtrack == 0 ? true : false)
 
-    @backtrack = backtrack.to_i || 2
+    @backtrack = backtrack.to_i
+    @backtrack = 2 if @backtrack.nil? || @backtrack <= 0
 
     @cycle_time = (options['fields']['cycle_time'] || 'c_CycleTime')
     @lead_time = (options['fields']['lead_time'] || 'c_LeadTime')
     @queue_time = (options['fields']['queue_time'] || 'c_QueueTime')
-    @today = Date.today
+    @now = Time.now
+    @today = @now.to_date
+    @zero = Time.new(0)
+    @zero_date = @zero.to_date
     @enable = (options['enable'] || [])
   end
 
@@ -77,6 +81,71 @@ class CLQFill
     (Date.parse(designed_output['Results'][0]['_ValidateFrom']) rescue nil)
   end
 
+  def calculate_cycle_time(id, accepted)
+    pagesize = 20
+    state_scan = {
+      'find' => {
+        'ObjectID' => id
+      },
+      "sort" => { "_ValidFrom" => 1 },
+      "fields" => [
+        "ScheduleState",
+        "_ValidFrom"
+      ],
+      "hydrate" => [
+        "ScheduleState",
+        "_ValidFrom"
+      ],
+      "pagesize" => pagesize
+    }
+    page = 0
+    state_toggles = []
+    current_state = false
+    begin
+      state_scan['start'] = page * pagesize
+
+      states = JSON.parse(
+        @lookback.post(state_scan.to_json, content_type: 'text/javascript')
+      )
+      result_count = states['TotalResultCount']
+      results = states['Results']
+
+      results.each do |item|
+        if current_state && item['ScheduleState'] != 'In-Progress'
+          state_toggles << item['_ValidFrom']
+          current_state = false
+        elsif !current_state && item['ScheduleState'] == 'In-Progress'
+          state_toggles << item['_ValidFrom']
+          current_state = true
+        end
+      end
+      page += 1
+      sleep 1
+    end until page * pagesize > result_count
+puts "toggle: #{state_toggles}"
+    if state_toggles.empty?
+      return 0 if !accepted
+      return 1 # minimum cycle 1 if it's accepted
+    end
+
+    current_state = true
+    accumulation = 0
+    previous_time = state_toggles.shift
+    state_toggles.each do |state_time|
+      if current_state
+        accumulation += Time.parse(state_time) - Time.parse(previous_time)
+      end
+      previous_time = state_time
+      current_state = !current_state
+    end
+
+    if !accepted && current_state
+      accumulation += @now - Time.parse(previous_time)
+    end
+
+    ((@zero + accumulation).to_date - @zero_date).to_i
+  end
+
   def fill(object_type)
     if @update_all
       puts "Refreshing ALL objects..."
@@ -91,6 +160,7 @@ class CLQFill
       '((AcceptedDate >= ' \
       "\"#{(DateTime.parse(Time.now.utc.to_s) - @backtrack).strftime('%FT%TZ')}\") OR " \
       "(AcceptedDate = null))" unless @update_all
+    puts "Query: #{query.query_string}"
     objects = @rally.find(query)
 
     total_count = objects.count
@@ -111,19 +181,11 @@ class CLQFill
       designed_date = get_designed_date(obj['ObjectID'])
 
       if obj['ScheduleState'] != 'Accepted'
-        cycle_time = if in_progress_date
-                       (@today - in_progress_date).to_i
-                     else
-                       0
-                     end
+        cycle_time = calculate_cycle_time(obj['ObjectID'], false)
         lead_time = (@today - create_date).to_i
         queue_time = (defined_date ? (@today - defined_date).to_i : 0)
       else
-        cycle_time = if in_progress_date
-                       (accepted_date - in_progress_date).to_i
-                     else
-                       1
-                     end
+        cycle_time = calculate_cycle_time(obj['ObjectID'], true)
         lead_time = (accepted_date - create_date).to_i
         queue_time = if defined_date
                        if in_progress_date
@@ -170,182 +232,6 @@ class CLQFill
   end
 
 end
-
-def fill_clq(lookback_url, object_type, name, info, do_fill = false)
-
-  user = info['user']
-  pass = info['pass']
-
-  pagesize = 20
-
-  rest = RestClient::Resource.new(lookback_url, user, pass)
-
-  rally_api_config = {
-    base_url: 'https://rally1.rallydev.com/slm',
-    username: user,
-    password: pass,
-    version: 'v2.0',
-    workspace: name,
-  }
-
-  rally = RallyAPI::RallyRestJson.new(rally_api_config)
-
-  request = {
-    "find" => {
-      "_TypeHierarchy" => object_type,
-      "__At" => 'current',
-    },
-    "sort" => {
-      "_ValidTo" => -1
-    },
-    "fields" => [
-      "ObjectID",
-      "FormattedID",
-      "ScheduleState",
-      "CreationDate",
-      "AcceptedDate",
-      "InProgressDate",
-      "_ValidFrom",
-      "_ValidTo"
-    ],
-    "hydrate" => [
-      "FormattedID",
-      "ScheduleState"
-    ],
-    "pagesize" => pagesize,
-  }
-
-
-  request['find']['Project'] = info['filters']['project'] if
-    info['filters'] && info['filters']['project']
-
-  defined_request = {
-    "find" => {
-      "_TypeHierarchy" => object_type,
-      "ScheduleState" => "Defined",
-    },
-    "sort" => {
-      "_ValidFrom" => 1
-    },
-    "fields" => [
-      "_ValidFrom",
-    ],
-    "pagesize" => 1,
-  }
-
-
-
-  page = 0
-
-  begin
-    puts "---Page #{page}---"
-    STDOUT.flush
-    request['start'] = page * pagesize
-    response = rest.post(request.to_json, content_type: 'text/javascript')
-    output = JSON.parse(response)
-
-    result_count = output['TotalResultCount']
-
-    results = output['Results']
-
-    results.each do |item|
-      begin
-        obj = rally.read(object_type, item['ObjectID'])
-
-        puts "-#{item['FormattedID']}:"
-        STDOUT.flush
-
-        create_date = (Date.parse(item['CreationDate']) rescue nil)
-        accepted_date = (Date.parse(item['AcceptedDate']) rescue nil)
-        in_progress_date = (Date.parse(item['InProgressDate']) rescue nil)
-
-  #---get defined date
-        defined_request['find']['ObjectID'] = item['ObjectID']
-
-        defined_output =
-          JSON.parse(
-            rest.post(defined_request.to_json, content_type: 'text/javascript')
-        )
-
-        defined_date =
-          (Date.parse(defined_output['Results'][0]['_ValidFrom']) rescue nil)
-
-        update = {}
-
-        if item['ScheduleState'] != 'Accepted'
-          today = Date.today
-          # time for object not accepted yet
-          cycle_time = if in_progress_date
-                         (today - in_progress_date).to_i
-                       else
-                         0 # if not in progress, then 0 cycle time
-                       end
-          lead_time = (today - create_date).to_i
-          queue_time = (defined_date ? (today - defined_date).to_i : 0)
-        else
-          # time for accepted opbjects
-          cycle_time = if in_progress_date
-                         (accepted_date - in_progress_date).to_i
-                       else
-                         1 # minimum cycle time is 1
-                       end
-          lead_time = (accepted_date - create_date).to_i
-          queue_time = if defined_date
-                         if in_progress_date
-                           (in_progress_date - defined_date).to_i
-                         else
-                           (accepted_date - defined_date).to_i
-                         end
-                       else
-                         0
-                       end
-        end
-
-        puts "c:#{cycle_time}, l:#{lead_time}, q:#{queue_time}"
-        STDOUT.flush
-
-        if info['enable']
-          if info['enable'].include?('cycle_time')
-            cycle_time_name = (info['fields']['cycle_time'] || 'c_CycleTime')
-            update[cycle_time_name] = cycle_time unless
-              cycle_time == obj[cycle_time_name]
-          end
-          if info['enable'].include?('lead_time')
-            lead_time_name = (info['fields']['lead_time'] || 'c_LeadTime')
-            update[lead_time_name] = lead_time unless
-              lead_time == obj[lead_time_name]
-          end
-          if info['enable'].include?('queue_time')
-            queue_time_name = (info['fields']['queue_time'] || 'c_QueueTime')
-            update[queue_time_name] = queue_time unless
-              queue_time == obj[queue_time_name]
-          end
-        end
-
-        if update.empty?
-          puts "No update"
-          STDOUT.flush
-        else
-          rally.update(object_type, item['ObjectID'], update) if do_fill
-          puts "update: #{update}"
-          STDOUT.flush
-        end
-
-      rescue Exception => e
-        puts "Exception: #{e.backtrace}"
-        STDOUT.flush
-      end
-    end
-
-    page += 1
-    sleep 1
-  end until page * pagesize > result_count
-rescue Exception => e
-  puts "Exception, backtrace: #{e.backtrace.to_json}"
-  STDOUT.flush
-  raise e
-end
-
 
 puts "Rally Time Calculator started: #{DateTime.now.to_s}"
 

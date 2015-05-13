@@ -8,7 +8,7 @@ require 'yaml'
 require 'logger'
 
 class CLQFill
-  def initialize(wname, wid, user, pass, options)
+  def initialize(wname, wid, user, pass, options, backtrack = 2)
     @lookback =
       RestClient::Resource.new(
         "https://rally1.rallydev.com/analytics/v2.0/service/rally/workspace/" \
@@ -24,7 +24,9 @@ class CLQFill
       workspace: wname
     )
     @dryrun = options['dryrun'] ? true : false
-    @update_all = options['update_all'] ? true : false
+    @update_all = (backtrack == 0 ? true : false)
+
+    @backtrack = backtrack.to_i || 2
 
     @cycle_time = (options['fields']['cycle_time'] || 'c_CycleTime')
     @lead_time = (options['fields']['lead_time'] || 'c_LeadTime')
@@ -79,14 +81,15 @@ class CLQFill
     if @update_all
       puts "Refreshing ALL objects..."
     else
-      puts "Update only, objects accepted in last 48 hours"
+      puts "Update only, ongoing issues and accepted within last " \
+           "#{@backtrack} days"
     end
 
     query = RallyAPI::RallyQuery.new()
     query.type = object_type
     query.query_string =
       '((AcceptedDate >= ' \
-      "\"#{(DateTime.parse(Time.now.utc.to_s) - 2).strftime('%FT%TZ')}\") OR " \
+      "\"#{(DateTime.parse(Time.now.utc.to_s) - @backtrack).strftime('%FT%TZ')}\") OR " \
       "(AcceptedDate = null))" unless @update_all
     objects = @rally.find(query)
 
@@ -343,9 +346,14 @@ rescue Exception => e
   raise e
 end
 
+
 puts "Rally Time Calculator started: #{DateTime.now.to_s}"
 
 conf = YAML.load_file('rally_time_calc.yml')
+
+if ARGV.size > 0
+  bt = ARGV[0].to_i
+end
 
 raise "No workspaces specified" unless conf['workspaces']
 raise "Workspace needs to be an array" unless conf['workspaces'].is_a?(Hash)
@@ -363,7 +371,7 @@ conf['workspaces'].each do |name, info|
 
   options = info.select {|name, _| pick.include?(name)}
 
-  clq = CLQFill.new(name, info['id'], info['user'], info['pass'], options)
+  clq = CLQFill.new(name, info['id'], info['user'], info['pass'], options, bt)
 
   types.each do |type|
     clq.fill(type)

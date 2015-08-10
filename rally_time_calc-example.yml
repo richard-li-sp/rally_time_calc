@@ -7,6 +7,7 @@ workspaces:
       project: 2233445566
     objects: [HierarchicalRequirement, Defect]
     enable: [cycle_time, lead_time, queue_time]
+    fill_defect_est: true
     fields:
       cycle_time: c_CycleTime
       lead_time: c_LeadTime

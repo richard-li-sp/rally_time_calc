@@ -196,7 +196,15 @@ class CLQFill
                                             accepted_date
                                            )
           lead_time = (@today - create_date).to_i
-          queue_time = (defined_date ? (@today - defined_date).to_i : 0)
+          queue_time = if defined_date
+                         if in_progress_date
+                           (in_progress_date - defined_date).to_i
+                         else
+                           (@today - defined_date).to_i
+                         end
+                       else
+                         0
+                       end
         else
           cycle_time = calculate_cycle_time(obj['ObjectID'], true,
                                             in_progress_date,
@@ -230,6 +238,10 @@ class CLQFill
         if @enable.include?('queue_time')
           update[@queue_time] = queue_time unless
             queue_time == obj[@queue_time]
+        end
+
+        if object_type.downcase == 'defect' && !obj['PlanEstimate']
+          update['PlanEstimate'] = 1.0
         end
 
         if update.empty?
